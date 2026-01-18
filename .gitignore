@@ -578,3 +578,5 @@ cython_debug/
 .idea/
 
 !/.gitignore
+models/
+yolo_models/

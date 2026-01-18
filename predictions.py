@@ -5,23 +5,45 @@ import numpy as np
 import torch
 from PIL import Image
 import pytesseract
+pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
 import easyocr
 from req import plate_post_request
 
 
 def pre_process_plate_image(plate_image):
     """
-    Pré-processa a imagem da placa para melhorar a leitura do OCR
+    Pré-processa a imagem da placa para melhorar a leitura do OCR com
+    técnicas avançadas para lidar com iluminação desigual.
 
     :param plate_image: Imagem da placa
     :return: Retorna a imagem pre-processada
     """
-    plate_image = cv2.cvtColor(plate_image, cv2.COLOR_BGR2GRAY)
-    plate_image = cv2.resize(plate_image, (0, 0), fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    plate_image = cv2.medianBlur(plate_image, 3)
-    plate_image = cv2.threshold(plate_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    return plate_image
 
+    # 1. Converter para escala de cinza
+    gray = cv2.cvtColor(plate_image, cv2.COLOR_BGR2GRAY)
+
+    # 2. Redução de ruído inteligente (Filtro Bilateral)
+    #    Preserva bordas enquanto remove ruído.
+    #    (d=9, sigmaColor=75, sigmaSpace=75) são valores comuns.
+    blurred = cv2.bilateralFilter(gray, 9, 75, 75)
+
+    # 3. Redimensionar (Upscaling)
+    #    Aumentar a imagem ajuda o OCR a ver melhor os detalhes.
+    #    Fazer isso *depois* de tratar o ruído é mais eficaz.
+    upscaled = cv2.resize(blurred, (0, 0), fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    adaptive_thresh = cv2.adaptiveThreshold(
+        upscaled,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11,
+        2
+    )
+
+    kernel = np.ones((1, 1), np.uint8)
+    cleaned = cv2.morphologyEx(adaptive_thresh, cv2.MORPH_OPEN, kernel)
+    return cleaned
 
 def post_process_plate_text(plate_text, ocr):
     """
@@ -68,21 +90,24 @@ def tesseract_read(plate_image):
     return post_process_plate_text(plate_text, "Tesseract")
 
 
-def easy_ocr_read(plate_image):
+def easy_ocr_read(plate_image, reader=None):
     """
     Realiza a leitura da placa utilizando o EasyOCR
 
     :param plate_image: Imagem da placa
+    :param reader: Instância do EasyOCR já inicializada (opcional)
     :return: Retorna o texto extraído da placa
     """
-    reader = easyocr.Reader(['en'], gpu=True)
+    if reader is None:
+        reader = easyocr.Reader(['en'], gpu=True)
     result = reader.readtext(plate_image, detail=0, paragraph=True, batch_size=1, workers=0,
                              allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
     if result:
-        return post_process_plate_text(result[0][1], "EasyOCR")
+        # quando detail=0, o retorno é uma lista de strings
+        return post_process_plate_text(result[0], "EasyOCR")
 
 
-def handle_ocr(plate_image, preview, pre_processing=False, ):
+def handle_ocr(plate_image, preview, pre_processing=False, reader=None):
     """
     Gerencia a leitura da placa utilizando o Tesseract OCR ou EasyOCR com opção de pré-processamento da imagem
 
@@ -99,13 +124,13 @@ def handle_ocr(plate_image, preview, pre_processing=False, ):
     try:
         result = tesseract_read(plate_image)
         if result["valid"] is None:
-            return easy_ocr_read(plate_image)
+            return easy_ocr_read(plate_image, reader)
         return result
 
     except pytesseract.TesseractNotFoundError as e:
         print(e)
         print("Tesseract não encontrado. Utilizando EasyOCR")
-        return easy_ocr_read(plate_image)
+        return easy_ocr_read(plate_image, reader)
 
 
 class Prediction:
@@ -113,13 +138,14 @@ class Prediction:
     Classe responsável por realizar a detecção de veículos e captura de placas
     """
 
-    def __init__(self, plate_model, pre_treined_model, data: dict):
+    def __init__(self, plate_model, pre_treined_model, easyocr_reader, data: dict):
         self.pre_trained_model = pre_treined_model
         self.data = data
         self.id_blacklist = set()
         self.last_capture = None
         self.plate_model = plate_model
         self.frame = 0
+        self.ocr_reader = easyocr_reader
 
     @staticmethod
     def check_gpu():
@@ -255,7 +281,7 @@ class Prediction:
                     plate_x1, plate_y1, plate_x2, plate_y2 = self.get_coords(plate_box)
                     plate_image = Image.fromarray(plate_result.orig_img[plate_y1:plate_y2, plate_x1:plate_x2])
                     plate_text = handle_ocr(plate_image, preview=self.data["preview"],
-                                            pre_processing=self.data["pre_processing"])
+                                            pre_processing=self.data["pre_processing"], reader=self.ocr_reader)
                     if self.data["preview"]:
                         cv2.imshow("Plate", np.array(plate_image))
                         self.draw_plate_details(original_frame, plate_text, vehicle_type)

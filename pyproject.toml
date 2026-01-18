@@ -1,0 +1,34 @@
+[project]
+name = "license-plate-recognition"
+version = "0.1.0"
+description = "Reconhecimento de placas com YOLOv8, EasyOCR e Tesseract."
+authors = [{ name = "Mistake" }]
+requires-python = "==3.11.*"
+
+dependencies = [
+  "torch",
+  "torchvision",
+  "torchaudio",
+  "ultralytics",
+  "easyocr",
+  "pytesseract",
+  "requests",
+]
+
+[tool.uv]
+index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+torchaudio = { index = "pytorch" }
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu121"
+verify_ssl = true
